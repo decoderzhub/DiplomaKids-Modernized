@@ -1,0 +1,234 @@
+version: '3.8'
+
+services:
+  # Supabase Services (Local Development)
+  supabase-db:
+    image: supabase/postgres:15.1.0.54
+    container_name: diplomakids-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_DB: diplomakids
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-diplomakids123}
+      POSTGRES_PORT: 5432
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./diplomakids-supabase-schema.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - diplomakids-network
+
+  supabase-auth:
+    image: supabase/gotrue:v2.92.0
+    container_name: diplomakids-auth
+    depends_on:
+      - supabase-db
+    ports:
+      - "9999:9999"
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost:9999}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-diplomakids123}@supabase-db:5432/diplomakids?search_path=auth
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP:-true}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM:-false}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@diplomakids.com}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-smtp.sendgrid.net}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-apikey}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-DiplomaKids}
+      GOTRUE_EXTERNAL_PHONE_ENABLED: ${ENABLE_PHONE_SIGNUP:-true}
+      GOTRUE_SMS_AUTOCONFIRM: ${ENABLE_PHONE_AUTOCONFIRM:-false}
+    networks:
+      - diplomakids-network
+
+  supabase-realtime:
+    image: supabase/realtime:v2.10.1
+    container_name: diplomakids-realtime
+    depends_on:
+      - supabase-db
+    ports:
+      - "4000:4000"
+    environment:
+      DB_HOST: supabase-db
+      DB_PORT: 5432
+      DB_NAME: diplomakids
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-diplomakids123}
+      DB_SSL: "false"
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      REPLICATION_MODE: RLS
+      REPLICATION_POLL_INTERVAL: 100
+      SECURE_CHANNELS: "true"
+      SLOT_NAME: supabase_realtime_rls
+      TEMPORARY_SLOT: "true"
+    networks:
+      - diplomakids-network
+
+  supabase-storage:
+    image: supabase/storage-api:v0.43.11
+    container_name: diplomakids-storage
+    depends_on:
+      - supabase-db
+    ports:
+      - "5000:5000"
+    environment:
+      ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+      POSTGREST_URL: http://supabase-rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-diplomakids123}@supabase-db:5432/diplomakids
+      STORAGE_BACKEND: file
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_FILE_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+    volumes:
+      - storage-data:/var/lib/storage
+    networks:
+      - diplomakids-network
+
+  supabase-rest:
+    image: postgrest/postgrest:v11.2.0
+    container_name: diplomakids-rest
+    depends_on:
+      - supabase-db
+    ports:
+      - "3000:3000"
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD:-diplomakids123}@supabase-db:5432/diplomakids
+      PGRST_DB_SCHEMAS: public,storage,auth
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    networks:
+      - diplomakids-network
+
+  supabase-studio:
+    image: supabase/studio:latest
+    container_name: diplomakids-studio
+    ports:
+      - "54323:3000"
+    environment:
+      SUPABASE_URL: http://kong:8000
+      STUDIO_PG_META_URL: http://meta:8080
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+    networks:
+      - diplomakids-network
+
+  # Kong API Gateway
+  kong:
+    image: kong:3.3
+    container_name: diplomakids-kong
+    depends_on:
+      - supabase-auth
+      - supabase-rest
+      - supabase-realtime
+      - supabase-storage
+    ports:
+      - "8000:8000/tcp"
+      - "8443:8443/tcp"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth,jwt
+    volumes:
+      - ./kong.yml:/var/lib/kong/kong.yml:ro
+    networks:
+      - diplomakids-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: diplomakids-backend
+    ports:
+      - "8080:8000"
+    environment:
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-diplomakids123}@supabase-db:5432/diplomakids
+    depends_on:
+      - supabase-db
+      - kong
+    volumes:
+      - ./diplomakids-backend.py:/app/main.py
+      - ./requirements.txt:/app/requirements.txt
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - diplomakids-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: diplomakids-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - diplomakids-network
+
+  # MinIO for Object Storage (Alternative to S3)
+  minio:
+    image: minio/minio
+    container_name: diplomakids-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-diplomakids}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-diplomakids123}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - diplomakids-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: diplomakids-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - kong
+    networks:
+      - diplomakids-network
+
+volumes:
+  postgres-data:
+  storage-data:
+  redis-data:
+  minio-data:
+
+networks:
+  diplomakids-network:
+    driver: bridge

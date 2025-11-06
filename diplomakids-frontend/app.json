@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "DiplomaKids",
+    "slug": "diplomakids",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#4A90E2"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.diplomakids.app"
+    },
+    "android": {
+      "package": "com.diplomakids.app"
+    }
+  }
+}
